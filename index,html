@@ -1,0 +1,221 @@
+import React, { useState, useEffect } from "react";
+
+export default function WeatherDinnerRecommender() {
+  const API_KEY = process.env.NEXT_PUBLIC_OWM_KEY || "REPLACE_WITH_YOUR_KEY";
+
+  // --- LocalStorage Keys ---
+  const STORAGE_KEY_HISTORY = "wd_recent_menus";
+  const STORAGE_KEY_FAVORITES = "wd_favorites";
+
+  // --- Menu Data ---
+  const SIDE_DISHES = {
+    korean: ["Kimchi", "Seasoned Spinach", "Braised Potatoes", "Seaweed Soup"],
+    seafood: ["Squid Stir-fry", "Seaweed Salad"],
+    spicy: ["Fried Dumplings", "Cucumber Kimchi", "Green Onion Salad"],
+    western: ["Mashed Potatoes", "Coleslaw", "Garlic Bread"],
+  };
+
+  const DRINKS = [
+    { name: "Soju", tags: ["korean", "alcohol"] },
+    { name: "Makgeolli", tags: ["korean", "alcohol"] },
+    { name: "Beer", tags: ["universal", "alcohol"] },
+    { name: "Red Wine", tags: ["western", "alcohol"] },
+    { name: "Sparkling Water", tags: ["light", "non-alcohol"] },
+    { name: "Green Tea", tags: ["korean", "non-alcohol"] },
+  ];
+
+  const WEATHER_MENU_MAP = [
+    {
+      match: (w, t) => /rain|drizzle|thunderstorm/i.test(w),
+      menus: [
+        { title: "Spicy Kimchi Jjigae", tags: ["spicy", "korean"] },
+        { title: "Dakjjim (Braised Chicken)", tags: ["comfort", "braise"] },
+      ],
+    },
+    {
+      match: (w, t) => t < 10,
+      menus: [
+        { title: "Budae Jjigae", tags: ["spicy", "korean"] },
+        { title: "Shrimp Soup", tags: ["seafood", "soup"] },
+      ],
+    },
+    {
+      match: (w, t) => t >= 10 && t < 26,
+      menus: [
+        { title: "Bibimbap", tags: ["balanced", "korean"] },
+        { title: "Grilled Mackerel", tags: ["seafood", "grill"] },
+      ],
+    },
+    {
+      match: (w, t) => t >= 26,
+      menus: [
+        { title: "Cold Buckwheat Noodles", tags: ["cold", "noodles"] },
+        { title: "Sushi Platter", tags: ["seafood", "light"] },
+      ],
+    },
+  ];
+
+  // --- State ---
+  const [weather, setWeather] = useState(null);
+  const [recommendations, setRecommendations] = useState([]);
+  const [error, setError] = useState(null);
+  const [showAlcohol, setShowAlcohol] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState(
+    JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY) || "[]")
+  );
+
+  // --- Fetch weather by city name ---
+  const fetchWeather = async (city) => {
+    try {
+      setLoading(true);
+      const res = await fetch(
+        `https://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${API_KEY}&units=metric`
+      );
+      if (!res.ok) throw new Error("Failed to fetch weather");
+      const data = await res.json();
+      const w = {
+        city: data.name,
+        temp: Math.round(data.main.temp),
+        feels_like: Math.round(data.main.feels_like),
+        condition: data.weather[0].main,
+        description: data.weather[0].description,
+      };
+      setWeather(w);
+      recommendMenus(w);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Pick menus based on weather ---
+  const recommendMenus = (w) => {
+    for (const { match, menus } of WEATHER_MENU_MAP) {
+      if (match(w.condition, w.temp)) {
+        const recentTitles = history
+          .filter((h) => Date.now() - h.timestamp < 7 * 24 * 60 * 60 * 1000)
+          .map((h) => h.title);
+
+        const available = menus.filter((m) => !recentTitles.includes(m.title));
+        const selected = available.length ? available : menus;
+        const menu = selected[Math.floor(Math.random() * selected.length)];
+
+        const sides = getSideDishes(menu.tags);
+        const drinks = showAlcohol
+          ? DRINKS.filter((d) => d.tags.includes("alcohol"))
+          : DRINKS.filter((d) => !d.tags.includes("alcohol"));
+
+        setRecommendations([{ ...menu, sides, drinks }]);
+
+        // Save history
+        const newHistory = [
+          { title: menu.title, timestamp: Date.now() },
+          ...history,
+        ].slice(0, 30);
+        setHistory(newHistory);
+        localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(newHistory));
+        break;
+      }
+    }
+  };
+
+  // --- Helper: match side dishes ---
+  const getSideDishes = (tags) => {
+    const all = Object.values(SIDE_DISHES).flat();
+    const matched = [];
+    tags.forEach((tag) => {
+      if (SIDE_DISHES[tag]) matched.push(...SIDE_DISHES[tag]);
+    });
+    return matched.length ? matched.slice(0, 3) : all.sort(() => 0.5 - Math.random()).slice(0, 3);
+  };
+
+  // --- Auto detect location ---
+  const detectLocation = () => {
+    if (!navigator.geolocation) return alert("Location not supported");
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const { latitude, longitude } = pos.coords;
+      const res = await fetch(
+        `https://api.openweathermap.org/data/2.5/weather?lat=${latitude}&lon=${longitude}&appid=${API_KEY}&units=metric`
+      );
+      const data = await res.json();
+      const w = {
+        city: data.name,
+        temp: Math.round(data.main.temp),
+        feels_like: Math.round(data.main.feels_like),
+        condition: data.weather[0].main,
+        description: data.weather[0].description,
+      };
+      setWeather(w);
+      recommendMenus(w);
+    });
+  };
+
+  // --- UI ---
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-pink-50 p-6">
+      <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-lg p-6">
+        <h1 className="text-3xl font-bold text-center mb-4">
+          ☁️ Weather-Based Dinner Recommender
+        </h1>
+
+        <div className="flex justify-center gap-2 mb-4">
+          <input
+            type="text"
+            placeholder="Enter city (e.g., Seoul)"
+            className="border p-2 rounded-lg w-1/2"
+            onKeyDown={(e) => e.key === "Enter" && fetchWeather(e.target.value)}
+          />
+          <button
+            onClick={detectLocation}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+          >
+            Use My Location
+          </button>
+        </div>
+
+        {loading && <p className="text-center text-gray-500">Loading weather...</p>}
+        {error && <p className="text-center text-red-500">{error}</p>}
+
+        {weather && (
+          <div className="text-center mb-6">
+            <h2 className="text-xl font-semibold">{weather.city}</h2>
+            <p className="text-gray-600">
+              {weather.temp}°C (Feels like {weather.feels_like}°C)
+            </p>
+            <p className="italic text-gray-500">{weather.description}</p>
+          </div>
+        )}
+
+        {recommendations.map((r) => (
+          <div
+            key={r.title}
+            className="border rounded-xl p-4 shadow-md bg-gray-50 mb-4"
+          >
+            <h3 className="text-lg font-semibold">{r.title}</h3>
+            <p className="text-sm text-gray-500 mb-2">{r.tags.join(", ")}</p>
+
+            <p className="mt-2">
+              <strong>Side Dishes:</strong> {r.sides.join(", ")}
+            </p>
+
+            <p className="mt-2">
+              <strong>Suggested Drinks:</strong>{" "}
+              {r.drinks.map((d) => d.name).join(", ")}
+            </p>
+          </div>
+        ))}
+
+        <div className="text-center">
+          <button
+            onClick={() => setShowAlcohol(!showAlcohol)}
+            className="mt-4 px-4 py-2 border rounded-lg hover:bg-gray-100"
+          >
+            {showAlcohol ? "Hide Alcoholic Drinks" : "Show Alcoholic Drinks"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
